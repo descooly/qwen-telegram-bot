@@ -43,4 +43,7 @@ logs/
 
 # OS
 .DS_Store
-Thumbs.db
+Thumbs.db.env
+secret.key
+__pycache__/
+.idea/
