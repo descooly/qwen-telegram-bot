@@ -1,0 +1,92 @@
+# bot/handlers/base.py
+import asyncio
+from aiogram import Router, F
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.filters import Command
+from core.llm import get_qwen_response
+from core.rag import get_relevant_knowledge, load_file_content
+
+router = Router()
+
+def get_main_keyboard():
+    kb = [
+        [KeyboardButton(text="📋 Услуги и цены")],
+        [KeyboardButton(text="📅 Записаться на консультацию")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, input_field_placeholder="Выберите действие или напишите вопрос...")
+
+
+@router.message(Command("start"))
+async def cmd_start(message: Message):
+    await message.answer(
+        "Здравствуйте! 👋\n\n"
+        "Я — помощник агентства «Отважный маркетинг».\n"
+        "Помогу подобрать услугу, показать цены и записать вас на консультацию.",
+        reply_markup=get_main_keyboard()
+    )
+
+
+# ==================== КНОПКА "Услуги и цены" ====================
+@router.message(F.text == "📋 Услуги и цены")
+async def btn_services(message: Message):
+    pricing_text = await load_file_content("pricing.md")
+    if not pricing_text:
+        pricing_text = "Информация о ценах временно недоступна."
+
+    await message.answer(pricing_text, reply_markup=get_main_keyboard())
+
+
+# ==================== КНОПКА "Записаться на консультацию" ====================
+@router.message(F.text == "📅 Записаться на консультацию")
+async def btn_appointment(message: Message):
+    await message.answer(
+        "Отлично! Давайте запишем вас на консультацию.\n\n"
+        "Пожалуйста, укажите в одном сообщении:\n"
+        "• Ваше ФИО\n"
+        "• Номер телефона\n"
+        "• Кратко опишите задачу (по желанию)",
+        reply_markup=get_main_keyboard()
+    )
+
+
+# ==================== ОБРАБОТКА ЛЮБОГО ТЕКСТА ====================
+@router.message(F.text)
+async def handle_user_message(message: Message):
+    user_text = message.text.strip()
+
+    # Показываем анимированный индикатор
+    thinking_msg = await message.answer("🤔 Думаю")
+
+    # Анимация троеточия
+    dots = ["", ".", "..", "..."]
+    for i in range(10):   # ~5 секунд максимум
+        try:
+            await thinking_msg.edit_text(f"🤔 Думаю{dots[i % 4]}")
+            await asyncio.sleep(0.45)
+        except:
+            break
+
+    # Получаем ответ от нейронки
+    knowledge = await get_relevant_knowledge(user_text)
+
+    system_prompt = (
+        "Ты — дружелюбный и профессиональный помощник агентства «Отважный маркетинг». "
+        "Отвечай кратко (2–4 абзаца максимум), простым текстом, без Markdown. "
+        "Названия услуг пиши в кавычках: «Быстрый старт». "
+        "Если спрашивают об услугах — обязательно указывай цены. "
+        "В конце мягко предлагай дальнейшее действие."
+        f"\n\nБаза знаний:\n{knowledge}"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_text}
+    ]
+
+    response = await get_qwen_response(messages, temperature=0.75)
+
+    # Заменяем "Думаю..." на финальный ответ БЕЗ клавиатуры при редактировании
+    await thinking_msg.edit_text(response)
+
+    # Отправляем клавиатуру отдельным сообщением (или можно отправить новый ответ)
+    await message.answer("Выберите дальнейшее действие:", reply_markup=get_main_keyboard())
